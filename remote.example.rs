@@ -6,7 +6,7 @@ pub const TARGET_MODEL: &str = "One SL";
 pub const STATIONS: [Station; 3] = [
     Station {
         name: "Deutschlandfunk",
-        stream_url: "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web",
+        stream_url: "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3",
     },
     Station {
         name: "radioeins (rbb)",
