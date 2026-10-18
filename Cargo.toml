@@ -1,0 +1,30 @@
+[package]
+name = "sonos-three-button-remote"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A three-button Sonos radio remote for ESP32-C3 with a WS2812B status LED"
+publish = false
+include = ["src/**", "examples/**", "scripts/*.py", "build.rs", "remote.example.rs", "wifi.example.toml", "README.md", "DISPLAY.md", "LICENSE", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml", ".gitignore"]
+
+[build-dependencies]
+toml = "=0.5.11"
+
+[dependencies]
+# Compatible with the installed Rust 1.73 ESP toolchain.
+esp32c3-hal = "=0.13.0"
+esp-wifi = { version = "=0.1.1", features = ["esp32c3", "wifi", "utils"] }
+embedded-svc = { version = "=0.26.4", default-features = false }
+smoltcp = { version = "=0.10.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-igmp", "proto-dhcpv4", "socket-dhcpv4", "socket-udp", "socket-tcp"] }
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+opt-level = "s"
+lto = false
+codegen-units = 1
+debug = 2
+
+[profile.release.package.esp-wifi]
+opt-level = 3

@@ -1,0 +1,23 @@
+[build]
+target = "riscv32imc-unknown-none-elf"
+
+[target.riscv32imc-unknown-none-elf]
+# This legacy HAL emulates atomic instructions in its RISC-V trap handler.
+rustflags = [
+  "-C", "link-arg=-Tlinkall.x",
+  "-C", "link-arg=-Trom_functions.x",
+  "-C", "target-feature=+a",
+  "--cfg", "target_has_atomic_load_store",
+  "--cfg", 'target_has_atomic_load_store="8"',
+  "--cfg", 'target_has_atomic_load_store="16"',
+  "--cfg", 'target_has_atomic_load_store="32"',
+  "--cfg", 'target_has_atomic_load_store="ptr"',
+  "--cfg", "target_has_atomic",
+  "--cfg", 'target_has_atomic="8"',
+  "--cfg", 'target_has_atomic="16"',
+  "--cfg", 'target_has_atomic="32"',
+  "--cfg", 'target_has_atomic="ptr"',
+]
+
+[unstable]
+build-std = ["core"]

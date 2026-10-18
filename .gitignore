@@ -1,0 +1,25 @@
+# Local settings and credentials
+*.local.*
+.env
+.env.*
+*.pem
+*.key
+/.aws/
+/.agents/
+/.codex/
+
+# Firmware embeds Wi-Fi credentials: never publish build output.
+/target/
+/.cargo-cache/
+*.bin
+*.elf
+*.map
+*.uf2
+
+# Editor, OS, and Python caches
+.DS_Store
+__pycache__/
+*.py[cod]
+*.swp
+*.bak
+*~
