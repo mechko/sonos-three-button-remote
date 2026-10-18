@@ -69,7 +69,7 @@ fn main() -> ! {
     let channel = rmt
         .channel0
         .configure(
-            io.pins.gpio2,
+            io.pins.gpio8,
             TxChannelConfig {
                 clk_divider: 1,
                 idle_output: true,
@@ -306,7 +306,33 @@ fn main() -> ! {
             let station = sonos::Station::ALL[index];
             status!("Starting radio...");
             let _ = writeln!(serial, "{}: {}\r", station.title(), station.url());
-            match play_radio(&mut network, candidate, station, &mut response, tick!()) {
+            // One initial attempt followed by at most three retries.
+            let mut retries = 0;
+            let result = loop {
+                match play_radio(&mut network, candidate, station, &mut response, tick!()) {
+                    Ok(()) => break Ok(()),
+                    Err(error) => {
+                        if retries == 3 {
+                            break Err(error);
+                        }
+                        let _ = writeln!(serial, "Playback attempt failed: {error}\r");
+                        network.wait_with_tick(1000, tick!());
+                        // Recheck identity before sending another playback command.
+                        if !matches!(controller.is_connected(), Ok(true))
+                            || network.ip().is_none()
+                            || !matches!(
+                                network.fetch_with_tick(candidate, &mut response, tick!()),
+                                Ok(xml) if sonos::is_target(xml)
+                            )
+                        {
+                            break Err(network::ControlError::Network("Sonos unavailable"));
+                        }
+                        retries += 1;
+                        let _ = writeln!(serial, "Retrying radio ({retries}/3)...\r");
+                    }
+                }
+            };
+            match result {
                 Ok(()) => {
                     set_led(LedStatus::Playing);
                     next_playback_check = current_millis() + 3000;

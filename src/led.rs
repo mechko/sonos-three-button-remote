@@ -1,4 +1,4 @@
-/// Low-brightness colors for the first WS2812B pixel.
+/// Status colors and animation for the onboard RGB LED.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     WifiDown,
@@ -14,12 +14,12 @@ pub fn color(status: Status, elapsed_ms: u64) -> [u8; 3] {
     match status {
         Status::WifiDown => [0, 24, 0],
         Status::SonosUnavailable => [8, 24, 0],
-        Status::Ready => [24, 0, 0],
+        Status::Ready => [12, 0, 0],
         Status::Playing => {
             // Six-second breathing cycle with a squared brightness curve.
             let phase = (elapsed_ms % 6000) as u32;
             let ramp = if phase <= 3000 { phase } else { 6000 - phase };
-            let brightness = 1 + 254 * ramp * ramp / 9_000_000;
+            let brightness = 1 + 23 * ramp * ramp / 9_000_000;
             [brightness as u8, 0, 0]
         }
     }
@@ -48,7 +48,7 @@ mod tests {
     #[test]
     fn breathing_reaches_both_extremes_and_repeats_smoothly() {
         assert_eq!(color(Status::Playing, 0), [1, 0, 0]);
-        assert_eq!(color(Status::Playing, 3000), [255, 0, 0]);
+        assert_eq!(color(Status::Playing, 3000), [24, 0, 0]);
         assert_eq!(color(Status::Playing, 6000), [1, 0, 0]);
         for t in 0..3000 {
             assert!(color(Status::Playing, t)[0] <= color(Status::Playing, t + 1)[0]);
@@ -61,7 +61,7 @@ mod tests {
         for (status, expected) in [
             (Status::WifiDown, [0, 24, 0]),
             (Status::SonosUnavailable, [8, 24, 0]),
-            (Status::Ready, [24, 0, 0]),
+            (Status::Ready, [12, 0, 0]),
         ] {
             let words = frame(color(status, 0));
             let mut decoded = [0u8; 3];

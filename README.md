@@ -1,7 +1,7 @@
 # Sonos Three Button Remote
 
 An ESP32-C3 remote that starts one of three radio stations on a Sonos speaker.
-Three physical buttons select stations; a single WS2812B LED shows connectivity
+Three physical buttons select stations; the onboard RGB LED shows connectivity
 and breathes green while radio is playing. The Sonos speaker fetches the audio;
 the ESP32 only sends local network commands. No display or cloud account is
 required. Licensed under the [MIT license](LICENSE).
@@ -9,7 +9,8 @@ required. Licensed under the [MIT license](LICENSE).
 ## Hardware and wiring
 
 Tested board: **ESP32-C3-DevKitM-1**. Use three normally-open momentary buttons
-and one **5V WS2812B (GRB)** pixel. Power the board through USB.
+and power the board through USB. The onboard RGB LED on GPIO8 provides status
+indication without additional wiring.
 
 ```mermaid
 flowchart LR
@@ -18,8 +19,6 @@ flowchart LR
         P0["GPIO0 / IO0"]
         P1["GPIO1 / IO1"]
         P10["GPIO10 / IO10"]
-        P2["GPIO2 / IO2"]
-        V5["5V"]
         GND["GND — common ground"]
     end
     BOARD --- ESP
@@ -29,14 +28,7 @@ flowchart LR
     B1 --- GND
     B2 --- GND
     B3 --- GND
-    subgraph LED["One WS2812B pixel — input end"]
-        DIN["DIN / DI"]
-        PLUS["+5V"]
-        MINUS["GND"]
-    end
-    P2 -->|Data| DIN
-    V5 --- PLUS
-    GND --- MINUS
+    BOARD --- LED["Onboard RGB status LED / GPIO8"]
 ```
 
 | Connection | Board pin | Notes |
@@ -44,9 +36,6 @@ flowchart LR
 | Button 1 | GPIO0 ↔ GND | First station in configuration |
 | Button 2 | GPIO1 ↔ GND | Second station |
 | Button 3 | GPIO10 ↔ GND | Third station |
-| LED DIN | GPIO2 | Connect to input end, not DOUT |
-| LED +5V | 5V | One pixel, with board powered over USB |
-| LED GND | GND | Shared ground |
 
 Each button uses an internal pull-up: **pressing connects its GPIO to GND**.
 Briefly bridging the GPIO to GND works for testing. Contacts debounce for
@@ -56,19 +45,6 @@ released and pressed again. No radio starts automatically at boot.
 Selections made during network operations are queued in press order (up to
 16; a full queue drops the oldest). Simultaneous presses use configuration order.
 GPIO0, GPIO1, and GPIO10 are not boot strapping pins; BOOT is not a station button.
-
-The diagram shows the **tested direct LED connection**, without a level
-shifter or external resistors. Keep data wiring short. Other WS2812B versions
-or longer leads may need a 74AHCT125 level shifter and a 330Ω series resistor.
-GPIO2 is a strapping pin; Espressif recommends a pull-up to 3V3 to avoid reset
-glitches (for example, 10 kΩ if needed). Never connect 5V to a GPIO. Connect
-with power off. Use just one pixel cut at the marked cut points; the firmware
-sends one pixel and does not clear the rest of a connected strip. A whole strip
-requires a suitable separate supply with shared GND; do not join its +5V rail
-to the USB-powered board's 5V rail.
-
-References: [Espressif GPIO/strapping guidance](https://docs.espressif.com/projects/esp-hardware-design-guidelines/en/latest/esp32c3/schematic-checklist.html#strapping-pins),
-[NeoPixel wiring](https://learn.adafruit.com/adafruit-neopixel-uberguide/basic-connections).
 
 ## Compile-time configuration
 
@@ -161,6 +137,10 @@ cargo espflash flash --release --locked --port PORT --monitor
 
 Wait for `Ready` / `Press for radio`, then press a station button. The monitor
 reports `Starting radio...`, the selected name and URI, then `Playing radio`.
+Failed playback attempts are retried up to three times after the initial
+attempt, with a one-second pause and a speaker identity check before each
+retry. Retries stop early if the speaker becomes unavailable. Button presses
+remain queued and the LED animation continues during retries.
 Errors include Sonos SOAP error codes. Serial uses UART0 at **115200 baud**,
 through the board's USB-to-UART bridge (TX GPIO21, RX GPIO20).
 
@@ -170,10 +150,13 @@ and ESP32 must share a LAN that permits local communication and multicast.
 
 ## Status LED
 
+The onboard RGB LED on GPIO8 shows the following states. The board's red
+power LED stays on.
+
 - **Red:** starting, Wi-Fi disconnected, or no DHCP address.
 - **Orange:** Wi-Fi has an IP, but Sonos is being searched for or is unreachable.
-- **Steady dim green:** Sonos is reachable, with no confirmed radio playback.
-- **Breathing green:** radio is playing. Brightness rises from 1/255 to 255/255
+- **Steady dim green (12/255):** Sonos is reachable, with no confirmed radio playback.
+- **Breathing green:** radio is playing. Brightness rises from 1/255 to 24/255
   over three seconds and falls over three seconds, repeating.
 
 Speaker identity is checked every 30 seconds, before playback, and after
@@ -213,12 +196,10 @@ rustc +stable --edition=2021 --test src/led.rs -o /tmp/sonos-led-tests
 /tmp/sonos-led-tests
 ```
 
-The ESP32-C3 board, all three station buttons, all three example streams, and
-the direct GPIO2 WS2812B wiring have been tested on hardware. The breathing
-animation and subsequent configuration refactor have build/test coverage;
-hardware verification of those changes is pending.
-
-Display details for reuse in other programs are in [DISPLAY.md](DISPLAY.md).
+The ESP32-C3 board, all three station buttons, and all three example streams
+have been tested on hardware. The onboard LED configuration and breathing
+animation have build/test coverage; hardware verification of the current
+firmware is pending.
 
 ## Sharing without credentials
 
@@ -235,16 +216,9 @@ it does not print values or TOML parser errors. Local Rust configuration is
 compiled as code, so use trusted configuration files only. Station URLs appear
 in serial logs: do not post logs containing private URL tokens.
 
-Before committing, inspect `git status --short`, then run:
-
-```sh
-python3 scripts/check_public_files.py
-```
-
-The audit checks tracked files for private paths and any locally configured
-Wi-Fi values without printing those values. It supplements manual review;
-it cannot detect every possible unrelated secret. Upload through the GitHub
-CLI after reviewing the files:
+Before committing, inspect `git status --short` and review the files for
+credentials and private paths. Upload through the GitHub CLI after reviewing
+the files:
 
 ```sh
 gh auth login
