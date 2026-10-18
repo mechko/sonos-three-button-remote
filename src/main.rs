@@ -5,18 +5,22 @@ mod button;
 mod led;
 mod network;
 mod sonos;
+mod wifi;
 
 use core::{cell::Cell, fmt::Write, panic::PanicInfo};
-use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
-use esp32c3_hal::rmt::{Rmt, TxChannel, TxChannelConfig, TxChannelCreator};
-use esp32c3_hal::{
-    clock::ClockControl, entry, peripherals::Peripherals, prelude::*, timer::TimerGroup, Delay,
-    Rng, Rtc, Uart, IO,
+use esp_hal::{
+    clock::CpuClock,
+    delay::Delay,
+    gpio::{Input, InputConfig, Pull},
+    uart::{Config as UartConfig, Uart},
 };
-use esp_wifi::{
-    current_millis, initialize,
-    wifi::{utils::create_network_interface, WifiStaDevice},
-    EspWifiInitFor,
+use esp_hal::{
+    gpio::Level,
+    rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator},
+    time::Rate,
+};
+use esp_radio::wifi::{
+    sta::StationConfig, AuthenticationMethodConfig, Config as WifiConfig, WifiController,
 };
 use led::Status as LedStatus;
 use smoltcp::{
@@ -24,37 +28,46 @@ use smoltcp::{
     socket::{tcp, udp},
 };
 use sonos::TextBuffer;
+use wifi::current_millis;
 
 include!(concat!(env!("OUT_DIR"), "/ssid.rs"));
 include!(concat!(env!("OUT_DIR"), "/password.rs"));
 
-#[entry]
+esp_bootloader_esp_idf::esp_app_desc!();
+
+#[esp_hal::main]
 fn main() -> ! {
-    let peripherals = Peripherals::take();
-    let system = peripherals.SYSTEM.split();
-    let clocks = ClockControl::max(system.clock_control).freeze();
-    let mut rtc = Rtc::new(peripherals.RTC_CNTL);
-    rtc.rwdt.disable();
-    let mut timers0 = TimerGroup::new(peripherals.TIMG0, &clocks);
-    let mut timers1 = TimerGroup::new(peripherals.TIMG1, &clocks);
-    timers0.wdt.disable();
-    timers1.wdt.disable();
-    let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-    // Active-low buttons connect to GND; internal pull-ups hold released inputs high.
-    let button_one = io.pins.gpio0.into_pull_up_input();
-    let button_two = io.pins.gpio1.into_pull_up_input();
-    let button_three = io.pins.gpio10.into_pull_up_input();
+    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    esp_alloc::heap_allocator!(size: 100 * 1024);
+    let timers = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
+    esp_rtos::start(timers.timer0, peripherals.FROM_CPU_INTR0);
+    // Active-low buttons connect to GND; pull-ups hold released inputs high.
+    let button_one = Input::new(
+        peripherals.GPIO0,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let button_two = Input::new(
+        peripherals.GPIO1,
+        InputConfig::default().with_pull(Pull::Up),
+    );
+    let button_three = Input::new(
+        peripherals.GPIO10,
+        InputConfig::default().with_pull(Pull::Up),
+    );
     macro_rules! readings {
         () => {
             [
-                button_one.is_low().unwrap(),
-                button_two.is_low().unwrap(),
-                button_three.is_low().unwrap(),
+                button_one.is_low(),
+                button_two.is_low(),
+                button_three.is_low(),
             ]
         };
     }
-    let mut delay = Delay::new(&clocks);
-    let mut serial = Uart::new(peripherals.UART0, &clocks);
+    let delay = Delay::new();
+    let mut serial = Uart::new(peripherals.UART0, UartConfig::default())
+        .unwrap()
+        .with_tx(peripherals.GPIO21)
+        .with_rx(peripherals.GPIO20);
     let _ = writeln!(
         serial,
         "Target: {} ({})\r",
@@ -65,19 +78,17 @@ fn main() -> ! {
         serial,
         "\r\nSonos buttons: 1=GPIO0, 2=GPIO1, 3=GPIO10; press to GND\r"
     );
-    let rmt = Rmt::new(peripherals.RMT, 80u32.MHz(), &clocks).unwrap();
+    let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80)).unwrap();
     let channel = rmt
         .channel0
-        .configure(
-            io.pins.gpio8,
-            TxChannelConfig {
-                clk_divider: 1,
-                idle_output: true,
-                idle_output_level: false,
-                ..Default::default()
-            },
+        .configure_tx(
+            &TxChannelConfig::default()
+                .with_clk_divider(1)
+                .with_idle_output(true)
+                .with_idle_output_level(Level::Low),
         )
-        .unwrap();
+        .unwrap()
+        .with_pin(peripherals.GPIO8);
     let mut led_channel = Some(channel);
     let led_status = Cell::new(LedStatus::WifiDown);
     let mut last_led_status = None;
@@ -100,9 +111,13 @@ fn main() -> ! {
         if !changed && last_led_color == Some(color) {
             return;
         }
-        let words = led::frame(color);
-        let transaction = led_channel.take().unwrap().transmit(&words);
-        match transaction.wait() {
+        let words = led::frame(color).map(PulseCode::from);
+        let result = led_channel
+            .take()
+            .unwrap()
+            .transmit(&words)
+            .and_then(|transaction| transaction.wait());
+        match result {
             Ok(channel) => {
                 led_channel = Some(channel);
                 last_led_status = Some(state);
@@ -114,7 +129,7 @@ fn main() -> ! {
             }
         }
     };
-    delay.delay_us(300u32);
+    delay.delay_micros(300u32);
     set_led(LedStatus::WifiDown);
 
     macro_rules! status {
@@ -126,34 +141,44 @@ fn main() -> ! {
         ($text:expr) => {{
             status!($text);
             loop {
-                delay.delay_ms(1000u32);
+                delay.delay_millis(1000u32);
             }
         }};
     }
     status!("Target speaker\nStarting Wi-Fi...");
-    let init = match initialize(
-        EspWifiInitFor::Wifi,
-        esp32c3_hal::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0,
-        Rng::new(peripherals.RNG),
-        system.radio_clock_control,
-        &clocks,
-    ) {
-        Ok(init) => init,
-        Err(error) => {
-            let _ = writeln!(serial, "Wi-Fi init: {error:?}\r");
-            fatal!("Wi-Fi init failed\nPress EN to retry");
-        }
+    let authentication = if PASSWORD.is_empty() {
+        AuthenticationMethodConfig::Open
+    } else {
+        AuthenticationMethodConfig::Wpa2Personal(
+            PASSWORD.try_into().expect("Invalid password length"),
+        )
     };
+    let config = WifiConfig::Station(
+        StationConfig::default()
+            .with_ssid(SSID.try_into().expect("Invalid SSID length"))
+            .with_authentication(authentication),
+    );
+    let mut controller = match WifiController::new(
+        peripherals.WIFI,
+        esp_radio::wifi::ControllerConfig::default().with_initial_config(config),
+    ) {
+        Ok(controller) => controller,
+        Err(_) => fatal!("Wi-Fi init failed\nPress EN to retry"),
+    };
+    let radio = esp_radio::wifi::Interface::station();
+    let mac = smoltcp::wire::EthernetAddress(radio.mac_address());
+    let mut device = wifi::DeviceAdapter(radio);
+    let mut iface_config = smoltcp::iface::Config::new(mac.into());
+    let rng = esp_hal::rng::Rng::new();
+    iface_config.random_seed = ((rng.random() as u64) << 32) | rng.random() as u64;
+    let iface = smoltcp::iface::Interface::new(
+        iface_config,
+        &mut device,
+        smoltcp::time::Instant::from_millis(current_millis() as i64),
+    );
     let mut socket_storage: [SocketStorage; 3] = Default::default();
-    let (iface, device, mut controller, mut sockets) =
-        match create_network_interface(&init, peripherals.WIFI, WifiStaDevice, &mut socket_storage)
-        {
-            Ok(network) => network,
-            Err(error) => {
-                let _ = writeln!(serial, "Network init: {error:?}\r");
-                fatal!("Network init failed\nPress EN to retry");
-            }
-        };
+    let mut sockets = smoltcp::iface::SocketSet::new(&mut socket_storage[..]);
+    sockets.add(smoltcp::socket::dhcpv4::Socket::new());
     let mut udp_rx_metadata = [udp::PacketMetadata::EMPTY; 8];
     let mut udp_tx_metadata = [udp::PacketMetadata::EMPTY; 2];
     let mut udp_rx = [0; 8192];
@@ -178,18 +203,6 @@ fn main() -> ! {
         tcp,
         next_port: 49153,
     };
-    let config = Configuration::Client(ClientConfiguration {
-        ssid: SSID.into(),
-        password: PASSWORD.into(),
-        ..Default::default()
-    });
-    if let Err(error) = controller
-        .set_configuration(&config)
-        .and_then(|_| controller.start())
-    {
-        let _ = writeln!(serial, "Wi-Fi setup: {error:?}\r");
-        fatal!("Wi-Fi setup failed\nPress EN to retry");
-    }
     let mut response = [0; 16384];
     let mut target = None;
     let mut button_state = button::Buttons::new(readings!(), current_millis());
@@ -204,7 +217,7 @@ fn main() -> ! {
         () => {
             || {
                 sample!();
-                if !matches!(controller.is_connected(), Ok(true)) {
+                if !controller.is_connected() {
                     set_led(LedStatus::WifiDown);
                 } else {
                     set_led(led_status.get());
@@ -214,22 +227,27 @@ fn main() -> ! {
     }
     loop {
         sample!();
-        if !matches!(controller.is_connected(), Ok(true)) {
+        if !controller.is_connected() {
             set_led(LedStatus::WifiDown);
             target = None;
             network.reset_dhcp();
             status!("Target speaker\nConnecting Wi-Fi...");
-            if let Err(error) = controller.connect() {
-                let _ = writeln!(serial, "Wi-Fi connect: {error:?}\r");
+            // Bound the async connection attempt while continuing input sampling.
+            if !matches!(
+                wifi::wait_with_tick(controller.connect_async(), 30000, || {
+                    sample!();
+                    set_led(LedStatus::WifiDown);
+                }),
+                Some(Ok(_))
+            ) {
+                status!("Wi-Fi connection failed or timed out");
             }
-            let deadline = current_millis() + 30000;
-            while current_millis() < deadline && !matches!(controller.is_connected(), Ok(true)) {
-                network.poll();
-                sample!();
-            }
-            if !matches!(controller.is_connected(), Ok(true)) {
+            if !controller.is_connected() {
                 status!("Wi-Fi failed\nRetrying...");
-                let _ = controller.disconnect();
+                let _ = wifi::wait_with_tick(controller.disconnect_async(), 5000, || {
+                    sample!();
+                    set_led(LedStatus::WifiDown);
+                });
                 network.wait_with_tick(3000, tick!());
                 continue;
             }
@@ -245,7 +263,10 @@ fn main() -> ! {
             }
             if network.ip().is_none() {
                 status!("No network address\nRetrying Wi-Fi...");
-                let _ = controller.disconnect();
+                let _ = wifi::wait_with_tick(controller.disconnect_async(), 5000, || {
+                    sample!();
+                    set_led(LedStatus::WifiDown);
+                });
                 network.wait_with_tick(1000, tick!());
                 continue;
             }
@@ -290,7 +311,7 @@ fn main() -> ! {
             match network.fetch_with_tick(candidate, &mut response, tick!()) {
                 Ok(xml) if sonos::is_target(xml) => {}
                 _ => {
-                    set_led(if matches!(controller.is_connected(), Ok(true)) {
+                    set_led(if controller.is_connected() {
                         LedStatus::SonosUnavailable
                     } else {
                         LedStatus::WifiDown
@@ -318,7 +339,7 @@ fn main() -> ! {
                         let _ = writeln!(serial, "Playback attempt failed: {error}\r");
                         network.wait_with_tick(1000, tick!());
                         // Recheck identity before sending another playback command.
-                        if !matches!(controller.is_connected(), Ok(true))
+                        if !controller.is_connected()
                             || network.ip().is_none()
                             || !matches!(
                                 network.fetch_with_tick(candidate, &mut response, tick!()),
@@ -344,18 +365,15 @@ fn main() -> ! {
                         network.fetch_with_tick(candidate, &mut response, tick!()),
                         Ok(xml) if sonos::is_target(xml)
                     );
-                    set_led(
-                        if !matches!(controller.is_connected(), Ok(true)) || network.ip().is_none()
-                        {
-                            target = None;
-                            LedStatus::WifiDown
-                        } else if reachable {
-                            LedStatus::Ready
-                        } else {
-                            target = None;
-                            LedStatus::SonosUnavailable
-                        },
-                    );
+                    set_led(if !controller.is_connected() || network.ip().is_none() {
+                        target = None;
+                        LedStatus::WifiDown
+                    } else if reachable {
+                        LedStatus::Ready
+                    } else {
+                        target = None;
+                        LedStatus::SonosUnavailable
+                    });
                     let mut text = TextBuffer::<160>::new();
                     let _ = write!(text, "Radio failed\n{error}\nPress to retry");
                     status!(text.as_str());
@@ -373,25 +391,22 @@ fn main() -> ! {
                         network.fetch_with_tick(candidate, &mut response, tick!()),
                         Ok(xml) if sonos::is_target(xml)
                     );
-                    set_led(
-                        if !matches!(controller.is_connected(), Ok(true)) || network.ip().is_none()
-                        {
-                            target = None;
-                            LedStatus::WifiDown
-                        } else if reachable {
-                            LedStatus::Ready
-                        } else {
-                            target = None;
-                            LedStatus::SonosUnavailable
-                        },
-                    );
+                    set_led(if !controller.is_connected() || network.ip().is_none() {
+                        target = None;
+                        LedStatus::WifiDown
+                    } else if reachable {
+                        LedStatus::Ready
+                    } else {
+                        target = None;
+                        LedStatus::SonosUnavailable
+                    });
                 }
             }
             next_playback_check = current_millis() + 3000;
         }
         set_led(led_status.get());
         network.poll();
-        delay.delay_ms(5u32);
+        delay.delay_millis(5u32);
     }
 }
 

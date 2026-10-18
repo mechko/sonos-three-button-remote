@@ -1,6 +1,6 @@
 use crate::sonos::{location, TextBuffer, SEARCH};
+use crate::wifi::current_millis;
 use core::fmt::Write;
-use esp_wifi::current_millis;
 use smoltcp::{
     iface::{Interface, SocketHandle, SocketSet},
     phy::Device,
@@ -134,7 +134,7 @@ impl<D: Device> Network<'_, D> {
                 let Some(url) = location(response) else {
                     continue;
                 };
-                let ip = Ipv4Address::from_bytes(&url.ip);
+                let ip = Ipv4Address::from(url.ip);
                 if metadata.endpoint.addr != IpAddress::Ipv4(ip) {
                     continue;
                 }

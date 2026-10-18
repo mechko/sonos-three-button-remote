@@ -446,13 +446,11 @@ mod tests {
 
     #[test]
     fn soap_sets_the_supplied_https_stream_and_escapes_xml() {
-        let url = std::format!("{}&test=1", STATIONS[0].url());
+        let url = "https://example.com/live?station=1&test=1";
         let request =
-            soap_request(Action::SetRadio(STATIONS[0]), "192.168.178.50:1400", &url).unwrap();
+            soap_request(Action::SetRadio(STATIONS[0]), "192.168.178.50:1400", url).unwrap();
         let (headers, body) = request.as_str().split_once("\r\n\r\n").unwrap();
-        assert!(body.contains(
-            "https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web&amp;test=1"
-        ));
+        assert!(body.contains("https://example.com/live?station=1&amp;test=1"));
         assert!(body.contains("&lt;DIDL-Lite"));
         assert!(body.contains("Deutschlandfunk"));
         assert!(headers.contains("#SetAVTransportURI\""));

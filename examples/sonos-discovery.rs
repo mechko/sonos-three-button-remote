@@ -8,40 +8,41 @@ mod network;
 #[allow(dead_code)]
 mod sonos;
 
+#[path = "../src/wifi.rs"]
+mod wifi;
+
 use core::{fmt::Write, panic::PanicInfo};
-use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
-use esp32c3_hal::{
-    clock::ClockControl, entry, peripherals::Peripherals, prelude::*, timer::TimerGroup, Delay,
-    Rng, Rtc, Uart, IO,
+use esp_hal::{
+    clock::CpuClock,
+    delay::Delay,
+    uart::{Config as UartConfig, Uart},
 };
-use esp_wifi::{
-    current_millis, initialize,
-    wifi::{utils::create_network_interface, WifiStaDevice},
-    EspWifiInitFor,
+use esp_radio::wifi::{
+    sta::StationConfig, AuthenticationMethodConfig, Config as WifiConfig, WifiController,
 };
 use smoltcp::{
     iface::SocketStorage,
     socket::{tcp, udp},
 };
 use sonos::TextBuffer;
+use wifi::current_millis;
 
 include!(concat!(env!("OUT_DIR"), "/ssid.rs"));
 include!(concat!(env!("OUT_DIR"), "/password.rs"));
 
-#[entry]
+esp_bootloader_esp_idf::esp_app_desc!();
+
+#[esp_hal::main]
 fn main() -> ! {
-    let peripherals = Peripherals::take();
-    let system = peripherals.SYSTEM.split();
-    let clocks = ClockControl::max(system.clock_control).freeze();
-    let mut rtc = Rtc::new(peripherals.RTC_CNTL);
-    rtc.rwdt.disable();
-    let mut timers0 = TimerGroup::new(peripherals.TIMG0, &clocks);
-    let mut timers1 = TimerGroup::new(peripherals.TIMG1, &clocks);
-    timers0.wdt.disable();
-    timers1.wdt.disable();
-    let _io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-    let mut delay = Delay::new(&clocks);
-    let mut serial = Uart::new(peripherals.UART0, &clocks);
+    let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
+    esp_alloc::heap_allocator!(size: 100 * 1024);
+    let timers = esp_hal::timer::timg::TimerGroup::new(peripherals.TIMG0);
+    esp_rtos::start(timers.timer0, peripherals.FROM_CPU_INTR0);
+    let delay = Delay::new();
+    let mut serial = Uart::new(peripherals.UART0, UartConfig::default())
+        .unwrap()
+        .with_tx(peripherals.GPIO21)
+        .with_rx(peripherals.GPIO20);
     let _ = writeln!(
         serial,
         "Target: {} ({})\r",
@@ -49,7 +50,7 @@ fn main() -> ! {
         sonos::TARGET_MODEL
     );
     let _ = writeln!(serial, "\r\nESP32-C3 Sonos discovery; no display\r");
-    delay.delay_ms(500u32);
+    delay.delay_millis(500u32);
     macro_rules! status {
         ($text:expr) => {{
             let _ = writeln!(serial, "{}\r", $text);
@@ -59,34 +60,44 @@ fn main() -> ! {
         ($text:expr) => {{
             status!($text);
             loop {
-                delay.delay_ms(1000u32);
+                delay.delay_millis(1000u32);
             }
         }};
     }
     status!("Target speaker\nStarting Wi-Fi...");
-    let init = match initialize(
-        EspWifiInitFor::Wifi,
-        esp32c3_hal::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0,
-        Rng::new(peripherals.RNG),
-        system.radio_clock_control,
-        &clocks,
-    ) {
-        Ok(init) => init,
-        Err(error) => {
-            let _ = writeln!(serial, "Wi-Fi init: {error:?}\r");
-            fatal!("Wi-Fi init failed\nPress EN to retry");
-        }
+    let authentication = if PASSWORD.is_empty() {
+        AuthenticationMethodConfig::Open
+    } else {
+        AuthenticationMethodConfig::Wpa2Personal(
+            PASSWORD.try_into().expect("Invalid password length"),
+        )
     };
+    let config = WifiConfig::Station(
+        StationConfig::default()
+            .with_ssid(SSID.try_into().expect("Invalid SSID length"))
+            .with_authentication(authentication),
+    );
+    let mut controller = match WifiController::new(
+        peripherals.WIFI,
+        esp_radio::wifi::ControllerConfig::default().with_initial_config(config),
+    ) {
+        Ok(controller) => controller,
+        Err(_) => fatal!("Wi-Fi init failed\nPress EN to retry"),
+    };
+    let radio = esp_radio::wifi::Interface::station();
+    let mac = smoltcp::wire::EthernetAddress(radio.mac_address());
+    let mut device = wifi::DeviceAdapter(radio);
+    let mut iface_config = smoltcp::iface::Config::new(mac.into());
+    let rng = esp_hal::rng::Rng::new();
+    iface_config.random_seed = ((rng.random() as u64) << 32) | rng.random() as u64;
+    let iface = smoltcp::iface::Interface::new(
+        iface_config,
+        &mut device,
+        smoltcp::time::Instant::from_millis(current_millis() as i64),
+    );
     let mut socket_storage: [SocketStorage; 3] = Default::default();
-    let (iface, device, mut controller, mut sockets) =
-        match create_network_interface(&init, peripherals.WIFI, WifiStaDevice, &mut socket_storage)
-        {
-            Ok(network) => network,
-            Err(error) => {
-                let _ = writeln!(serial, "Network init: {error:?}\r");
-                fatal!("Network init failed\nPress EN to retry");
-            }
-        };
+    let mut sockets = smoltcp::iface::SocketSet::new(&mut socket_storage[..]);
+    sockets.add(smoltcp::socket::dhcpv4::Socket::new());
     let mut udp_rx_metadata = [udp::PacketMetadata::EMPTY; 8];
     let mut udp_tx_metadata = [udp::PacketMetadata::EMPTY; 2];
     let mut udp_rx = [0; 8192];
@@ -111,35 +122,23 @@ fn main() -> ! {
         tcp,
         next_port: 49153,
     };
-    let config = Configuration::Client(ClientConfiguration {
-        ssid: SSID.into(),
-        password: PASSWORD.into(),
-        ..Default::default()
-    });
-    if let Err(error) = controller
-        .set_configuration(&config)
-        .and_then(|_| controller.start())
-    {
-        let _ = writeln!(serial, "Wi-Fi setup: {error:?}\r");
-        fatal!("Wi-Fi setup failed\nPress EN to retry");
-    }
     let mut response = [0; 16384];
     let mut target = None;
     loop {
-        if !matches!(controller.is_connected(), Ok(true)) {
+        if !controller.is_connected() {
             target = None;
             network.reset_dhcp();
             status!("Target speaker\nConnecting Wi-Fi...");
-            if let Err(error) = controller.connect() {
-                let _ = writeln!(serial, "Wi-Fi connect: {error:?}\r");
+            // Bound the async connection attempt so failed networks can be retried.
+            if !matches!(
+                wifi::wait_with_tick(controller.connect_async(), 30000, || {}),
+                Some(Ok(_))
+            ) {
+                status!("Wi-Fi connection failed or timed out");
             }
-            let deadline = current_millis() + 30000;
-            while current_millis() < deadline && !matches!(controller.is_connected(), Ok(true)) {
-                network.poll();
-            }
-            if !matches!(controller.is_connected(), Ok(true)) {
+            if !controller.is_connected() {
                 status!("Wi-Fi failed\nRetrying...");
-                let _ = controller.disconnect();
+                let _ = wifi::wait_with_tick(controller.disconnect_async(), 5000, || {});
                 network.wait(3000);
                 continue;
             }
@@ -152,7 +151,7 @@ fn main() -> ! {
             }
             if network.ip().is_none() {
                 status!("No network address\nRetrying Wi-Fi...");
-                let _ = controller.disconnect();
+                let _ = wifi::wait_with_tick(controller.disconnect_async(), 5000, || {});
                 network.wait(1000);
                 continue;
             }

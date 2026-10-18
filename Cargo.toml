@@ -2,20 +2,23 @@
 name = "sonos-three-button-remote"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.99"
 license = "MIT"
 description = "A three-button Sonos radio remote for ESP32-C3 with a WS2812B status LED"
 publish = false
 include = ["src/**", "examples/**", "scripts/*.py", "build.rs", "remote.example.rs", "wifi.example.toml", "README.md", "DISPLAY.md", "LICENSE", "Cargo.lock", ".cargo/config.toml", "rust-toolchain.toml", ".gitignore"]
 
 [build-dependencies]
-toml = "=0.5.11"
+toml = "1.1"
 
 [dependencies]
-# Compatible with the installed Rust 1.73 ESP toolchain.
-esp32c3-hal = "=0.13.0"
-esp-wifi = { version = "=0.1.1", features = ["esp32c3", "wifi", "utils"] }
-embedded-svc = { version = "=0.26.4", default-features = false }
-smoltcp = { version = "=0.10.0", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-igmp", "proto-dhcpv4", "socket-dhcpv4", "socket-udp", "socket-tcp"] }
+embassy-net-driver = "0.2"
+esp-hal = { version = "~1.2.2", features = ["esp32c3", "unstable"] }
+esp-radio = { version = "=1.0.0-beta.1", features = ["esp32c3", "wifi", "unstable"] }
+esp-rtos = { version = "0.4", features = ["esp32c3", "esp-radio"] }
+esp-alloc = { version = "0.11", features = ["esp32c3"] }
+esp-bootloader-esp-idf = { version = "0.6", features = ["esp32c3"] }
+smoltcp = { version = "0.12", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-udp", "socket-tcp"] }
 
 [profile.dev]
 opt-level = "s"
@@ -26,5 +29,8 @@ lto = false
 codegen-units = 1
 debug = 2
 
-[profile.release.package.esp-wifi]
+[profile.dev.package.esp-radio]
+opt-level = 3
+
+[profile.release.package.esp-radio]
 opt-level = 3

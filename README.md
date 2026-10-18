@@ -89,7 +89,7 @@ examples preserve the hardware-tested settings:
 
 | Button | Example station | Stream URI |
 | --- | --- | --- |
-| 1 | Deutschlandfunk | `https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3?aggregator=web` |
+| 1 | Deutschlandfunk | `https://st01.sslstream.dlf.de/dlf/01/128/mp3/stream.mp3` |
 | 2 | radioeins (rbb) | `x-rincon-mp3radio://dispatcher.rndfnk.com/rbb/radioeins/live/mp3/mid` |
 | 3 | Deutschlandfunk Kultur | `https://st02.sslstream.dlf.de/dlf/02/128/mp3/stream.mp3` |
 
@@ -106,14 +106,26 @@ Wi-Fi, speaker, or station settings.** Local files are ignored by Git.
 
 ## Build and flash
 
-This project uses the legacy `esp` Rust toolchain (tested with its Rust 1.73
-compiler) and pinned HAL/Wi-Fi dependencies. The compilation target is
-`riscv32imc-unknown-none-elf`. It also needs `rust-src` for `build-std` and
-`cargo-espflash` (tested with version 2.1.0). Toolchain setup is described in
-[The Rust on ESP Book](https://docs.espressif.com/projects/rust/book/).
-This repository preserves the tested legacy stack; it has not been migrated to
-the current HAL. Keep `Cargo.lock`. The original ESP32-WROOM-32 is not the
-current target, and its firmware binaries cannot be flashed to the C3.
+This project pins upstream **Rust 1.99.1** and targets
+`riscv32imc-unknown-none-elf`. `rustup` installs the compiler, target, rustfmt,
+and Clippy from `rust-toolchain.toml` when you first run Cargo. The ESP32-C3
+uses the standard Rust compiler; no custom `esp` toolchain or nightly
+`build-std` setup is needed. See [The Rust on ESP Book](https://docs.espressif.com/projects/rust/book/getting-started/toolchain.html).
+
+The firmware uses `esp-hal` 1.2.2, `esp-radio` 1.0.0-beta.1, `esp-rtos` 0.4,
+and smoltcp 0.12. The radio release is pinned exactly because its API is still
+in beta; keep `Cargo.lock` for reproducible dependency versions. Wi-Fi uses a
+100 KiB heap and the RTOS scheduler; the application continues polling its
+network stack, buttons, and status LED.
+
+Install the flasher once (the project configures it as Cargo's runner):
+
+```sh
+cargo install espflash --version 4.6.0 --locked
+```
+
+The original ESP32-WROOM-32 is not the target, and its firmware binaries cannot
+be flashed to the C3.
 
 After creating your local configuration files:
 
@@ -127,7 +139,7 @@ with your own port; Linux commonly uses `/dev/ttyUSB0` and Windows uses `COMn`.
 First, test the buttons without network access:
 
 ```sh
-cargo espflash flash --example button-test --release --locked --port PORT --monitor
+cargo run --example button-test --release --locked -- --port PORT
 ```
 
 The monitor reports each button by number and GPIO. Bridge its GPIO to GND,
@@ -136,7 +148,7 @@ release, and repeat. The shared build script still requires `wifi.local.toml`.
 Then flash the remote:
 
 ```sh
-cargo espflash flash --release --locked --port PORT --monitor
+cargo run --release --locked -- --port PORT
 ```
 
 Wait for `Ready` / `Press for radio`, then press a station button. The monitor
@@ -177,7 +189,7 @@ local network connectivity, not Internet access. Examples do not drive the LED.
 Standalone Sonos discovery (uses your compiled speaker settings):
 
 ```sh
-cargo espflash flash --example sonos-discovery --release --locked --port PORT --monitor
+cargo run --example sonos-discovery --release --locked -- --port PORT
 ```
 
 Discover speakers from the Mac on the same LAN, without third-party Python packages:
@@ -192,17 +204,33 @@ Use `--interface` and `--subnet` to override automatic interface selection.
 Run host tests without a board (always use public example settings):
 
 ```sh
-rustc +stable --edition=2021 --test src/sonos.rs -o /tmp/sonos-parser-tests
+rustc --edition=2021 --test src/sonos.rs -o /tmp/sonos-parser-tests
 /tmp/sonos-parser-tests
-rustc +stable --edition=2021 --test src/button.rs -o /tmp/sonos-button-tests
+rustc --edition=2021 --test src/button.rs -o /tmp/sonos-button-tests
 /tmp/sonos-button-tests
-rustc +stable --edition=2021 --test src/led.rs -o /tmp/sonos-led-tests
+rustc --edition=2021 --test src/led.rs -o /tmp/sonos-led-tests
 /tmp/sonos-led-tests
 ```
 
-The ESP32-C3 board, all three station buttons, and all three example streams
-have been tested on hardware. The onboard LED configuration and breathing
-animation have build/test coverage.
+The migrated firmware has been flashed and verified on the ESP32-C3-DevKitM-1
+with Rust 1.99.1 and espflash 4.6.0. Startup checks confirmed Wi-Fi connection,
+DHCP, Sonos discovery, and speaker identity verification; operation was then
+confirmed on hardware. The earlier firmware was also tested with all three
+station buttons and example streams. Reconnection after restarting the access
+point has not been rechecked after migration.
+
+All 15 host tests pass, covering Sonos parsing, button logic, and LED frame
+generation. Both examples and the remote build in debug and release profiles;
+formatting, Clippy, and ESP32-C3 image generation checks pass.
+
+Check all firmware builds and formatting without flashing:
+
+```sh
+cargo build --release --locked --bins --examples
+cargo build --locked --bins --examples
+cargo fmt --all -- --check
+cargo clippy --release --locked --bins --examples -- -D warnings
+```
 
 MIT applies to this project's source. Dependencies retain their own licenses,
 including Espressif's Wi-Fi components. This is an independent project and is
