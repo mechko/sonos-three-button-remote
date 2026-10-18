@@ -1,0 +1,11 @@
+[package]
+name = "sonos-network-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "network.rs"
+
+[dev-dependencies]
+smoltcp = { workspace = true }

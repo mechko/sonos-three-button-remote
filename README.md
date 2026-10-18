@@ -113,10 +113,13 @@ uses the standard Rust compiler; no custom `esp` toolchain or nightly
 `build-std` setup is needed. See [The Rust on ESP Book](https://docs.espressif.com/projects/rust/book/getting-started/toolchain.html).
 
 The firmware uses `esp-hal` 1.2.2, `esp-radio` 1.0.0-beta.1, `esp-rtos` 0.4,
-and smoltcp 0.12. The radio release is pinned exactly because its API is still
+and smoltcp 0.14. The radio release is pinned exactly because its API is still
 in beta; keep `Cargo.lock` for reproducible dependency versions. Wi-Fi uses a
 100 KiB heap and the RTOS scheduler; the application continues polling its
-network stack, buttons, and status LED.
+network stack, buttons, and status LED. Station mode uses 802.11b/g for
+compatibility with the tested access point; 802.11n showed delayed DHCP and
+packet loss during troubleshooting. Serial reports signal strength in dBm
+while acquiring an address.
 
 Install the flasher once (the project configures it as Cargo's runner):
 
@@ -150,6 +153,14 @@ Then flash the remote:
 ```sh
 cargo run --release --locked -- --port PORT
 ```
+
+Wi-Fi association and DHCP address acquisition are separate steps. While
+waiting for an address, the LED stays red and serial reports `Getting IP`.
+Slow DHCP replies can take more than 20 seconds: the firmware reports
+`Continuing DHCP...` and keeps the Wi-Fi connection while DHCP retries. A lost
+Wi-Fi link triggers reconnection. Successful DHCP prints `Network address`.
+smoltcp 0.14 includes the fix that preserves the offer's transaction ID in
+DHCP requests and retries.
 
 Wait for `Ready` / `Press for radio`, then press a station button. The monitor
 reports `Starting radio...`, the selected name and URI, then `Playing radio`.
@@ -201,26 +212,30 @@ python3 scripts/discover_sonos.py --name "Your speaker room name"
 This uses SSDP and falls back to checking port 1400 on the active LAN subnet.
 Use `--interface` and `--subnet` to override automatic interface selection.
 
-Run host tests without a board (always use public example settings):
+Run host tests without a board (always use public example settings). Override
+the firmware target with your computer's Rust host target:
 
 ```sh
-rustc --edition=2021 --test src/sonos.rs -o /tmp/sonos-parser-tests
-/tmp/sonos-parser-tests
-rustc --edition=2021 --test src/button.rs -o /tmp/sonos-button-tests
-/tmp/sonos-button-tests
-rustc --edition=2021 --test src/led.rs -o /tmp/sonos-led-tests
-/tmp/sonos-led-tests
+cargo test -p sonos-network-tests --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
 ```
+
+The DHCP regression test simulates delayed offers and acknowledgements beyond
+20 seconds, checks that requests and retries retain the offer's transaction
+ID, and verifies that resetting DHCP after link loss clears the old address. It uses the
+same network module and smoltcp dependency as the firmware.
 
 The migrated firmware has been flashed and verified on the ESP32-C3-DevKitM-1
 with Rust 1.99.1 and espflash 4.6.0. Startup checks confirmed Wi-Fi connection,
 DHCP, Sonos discovery, and speaker identity verification; operation was then
-confirmed on hardware. The earlier firmware was also tested with all three
+confirmed on hardware. After the DHCP fixes, three consecutive starts in
+802.11b/g mode obtained an address and reached `Ready`. Some Sonos requests
+still timed out during testing; signal strength was about -73 to -74 dBm.
+The earlier firmware was also tested with all three
 station buttons and example streams. Reconnection after restarting the access
 point has not been rechecked after migration.
 
-All 15 host tests pass, covering Sonos parsing, button logic, and LED frame
-generation. Both examples and the remote build in debug and release profiles;
+All 16 host tests pass, covering DHCP, Sonos parsing, button logic, and LED
+frame generation. Both examples and the remote build in debug and release profiles;
 formatting, Clippy, and ESP32-C3 image generation checks pass.
 
 Check all firmware builds and formatting without flashing:

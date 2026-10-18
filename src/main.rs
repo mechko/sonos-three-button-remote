@@ -156,7 +156,13 @@ fn main() -> ! {
     let config = WifiConfig::Station(
         StationConfig::default()
             .with_ssid(SSID.try_into().expect("Invalid SSID length"))
-            .with_authentication(authentication),
+            .with_authentication(authentication)
+            // Prefer B/G for this low-bandwidth remote: N mode showed delayed
+            // DHCP and packet loss with the tested access point.
+            .with_protocols(
+                esp_radio::wifi::Protocols::default()
+                    .with_2_4(esp_radio::wifi::Protocol::B | esp_radio::wifi::Protocol::G),
+            ),
     );
     let mut controller = match WifiController::new(
         peripherals.WIFI,
@@ -255,21 +261,21 @@ fn main() -> ! {
         if network.ip().is_none() {
             target = None;
             set_led(LedStatus::WifiDown);
+            let _ = writeln!(serial, "Wi-Fi signal: {:?} dBm\r", controller.rssi());
             status!("Wi-Fi connected\nGetting IP...");
             let deadline = current_millis() + 20000;
-            while current_millis() < deadline && network.ip().is_none() {
+            while current_millis() < deadline && network.ip().is_none() && controller.is_connected()
+            {
                 network.poll();
                 sample!();
             }
             if network.ip().is_none() {
-                status!("No network address\nRetrying Wi-Fi...");
-                let _ = wifi::wait_with_tick(controller.disconnect_async(), 5000, || {
-                    sample!();
-                    set_led(LedStatus::WifiDown);
-                });
-                network.wait_with_tick(1000, tick!());
+                // Let smoltcp finish its DHCP retry/backoff cycle. Reassociating
+                // here aborts pending offers/requests on slow or lossy networks.
+                status!("No network address yet\nContinuing DHCP...");
                 continue;
             }
+            let _ = writeln!(serial, "Network address: {}\r", network.ip().unwrap());
         }
         if target.is_none() {
             set_led(LedStatus::SonosUnavailable);

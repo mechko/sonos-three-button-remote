@@ -18,7 +18,7 @@ esp-radio = { version = "=1.0.0-beta.1", features = ["esp32c3", "wifi", "unstabl
 esp-rtos = { version = "0.4", features = ["esp32c3", "esp-radio"] }
 esp-alloc = { version = "0.11", features = ["esp32c3"] }
 esp-bootloader-esp-idf = { version = "0.6", features = ["esp32c3"] }
-smoltcp = { version = "0.12", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-udp", "socket-tcp"] }
+smoltcp = { workspace = true }
 
 [profile.dev]
 opt-level = "s"
@@ -34,3 +34,11 @@ opt-level = 3
 
 [profile.release.package.esp-radio]
 opt-level = 3
+
+[workspace]
+members = ["tests/network"]
+default-members = ["."]
+resolver = "2"
+
+[workspace.dependencies]
+smoltcp = { version = "0.14", default-features = false, features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-dhcpv4", "socket-udp", "socket-tcp"] }
