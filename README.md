@@ -202,32 +202,7 @@ rustc +stable --edition=2021 --test src/led.rs -o /tmp/sonos-led-tests
 
 The ESP32-C3 board, all three station buttons, and all three example streams
 have been tested on hardware. The onboard LED configuration and breathing
-animation have build/test coverage; hardware verification of the current
-firmware is pending.
-
-## Sharing without credentials
-
-Commit only source, documentation, the license, and **example** configurations.
-`.gitignore` excludes `*.local.*`, environment files, build output, caches,
-and firmware binaries. `Cargo.toml` also uses an explicit source include list.
-The repository's example Wi-Fi settings are placeholders. Do not replace
-those placeholders with real credentials in a public commit.
-
-**Firmware binaries and generated source in `target/` contain your Wi-Fi
-credentials. Do not upload them as releases or build artifacts.** The build
-script parses credentials as TOML and escapes them into generated Rust strings;
-it does not print values or TOML parser errors. Local Rust configuration is
-compiled as code, so use trusted configuration files only. Station URLs appear
-in serial logs: do not post logs containing private URL tokens.
-
-Before committing, inspect `git status --short` and review the files for
-credentials and private paths. Upload through the GitHub CLI after reviewing
-the files:
-
-```sh
-gh auth login
-gh repo create sonos-three-button-remote --public --source=. --remote=origin --push
-```
+animation have build/test coverage.
 
 MIT applies to this project's source. Dependencies retain their own licenses,
 including Espressif's Wi-Fi components. This is an independent project and is
