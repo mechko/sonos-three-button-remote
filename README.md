@@ -6,6 +6,10 @@ and breathes green while radio is playing. The Sonos speaker fetches the audio;
 the ESP32 only sends local network commands. No display or cloud account is
 required. Licensed under the [MIT license](LICENSE).
 
+| Assembled remote | Perfboard wiring |
+| --- | --- |
+| <img src="docs/images/assembled-remote.jpg" alt="Three-button remote in a wooden enclosure with the onboard green LED lit" width="360"> | <img src="docs/images/perfboard-wiring.jpg" alt="Underside of the perfboard showing solder joints and green connecting wires" width="360"> |
+
 ## Hardware and wiring
 
 Tested board: **ESP32-C3-DevKitM-1**. Use three normally-open momentary buttons
