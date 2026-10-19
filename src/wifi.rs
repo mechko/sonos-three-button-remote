@@ -9,6 +9,10 @@ use smoltcp::{
     time::Instant,
 };
 
+// esp-radio defaults to only 5 dBm. Use 15 dBm to improve the uplink
+// without exceeding its documented ~16 dBm authentication caveat.
+pub const TX_POWER_DBM: i8 = 15;
+
 pub fn current_millis() -> u64 {
     esp_hal::time::Instant::now()
         .duration_since_epoch()

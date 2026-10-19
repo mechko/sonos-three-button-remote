@@ -90,6 +90,16 @@ fn main() -> ! {
         Ok(controller) => controller,
         Err(_) => fatal!("Wi-Fi init failed\nPress EN to retry"),
     };
+    // This API takes quarter-dBm units, unlike the old country power limit.
+    if let Err(error) = controller.set_max_tx_power(wifi::TX_POWER_DBM * 4) {
+        let _ = writeln!(serial, "Wi-Fi transmit power setup: {error:?}\r");
+        fatal!("Wi-Fi power setup failed\nPress EN to retry");
+    }
+    let _ = writeln!(
+        serial,
+        "Wi-Fi transmit power limit: {} dBm\r",
+        wifi::TX_POWER_DBM
+    );
     let radio = esp_radio::wifi::Interface::station();
     let mac = smoltcp::wire::EthernetAddress(radio.mac_address());
     let mut device = wifi::DeviceAdapter(radio);

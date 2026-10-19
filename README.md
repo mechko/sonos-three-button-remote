@@ -116,10 +116,15 @@ The firmware uses `esp-hal` 1.2.2, `esp-radio` 1.0.0-beta.1, `esp-rtos` 0.4,
 and smoltcp 0.14. The radio release is pinned exactly because its API is still
 in beta; keep `Cargo.lock` for reproducible dependency versions. Wi-Fi uses a
 100 KiB heap and the RTOS scheduler; the application continues polling its
-network stack, buttons, and status LED. Station mode uses 802.11b/g for
-compatibility with the tested access point; 802.11n showed delayed DHCP and
-packet loss during troubleshooting. Serial reports signal strength in dBm
-while acquiring an address.
+network stack, buttons, and status LED. Station mode currently uses 802.11b/g.
+The firmware explicitly sets a **15 dBm transmit-power limit** in both the
+remote and discovery example. `esp-radio` defaults to only 5 dBm; the old
+stack's country configuration allowed 20 dBm. The new API takes quarter-dBm
+units, so the firmware passes 60 for 15 dBm. This stays below the driver's
+reported authentication-problem threshold around 16 dBm on some boards.
+See `TX_POWER_DBM` in [src/wifi.rs](src/wifi.rs) and the
+[radio troubleshooting guidance](https://docs.espressif.com/projects/rust/esp-radio/1.0.0-beta.1/esp32c3/esp_radio/wifi/index.html#troubleshooting).
+Serial reports the configured power limit and received signal strength.
 
 Install the flasher once (the project configures it as Cargo's runner):
 
@@ -225,14 +230,17 @@ ID, and verifies that resetting DHCP after link loss clears the old address. It 
 same network module and smoltcp dependency as the firmware.
 
 The migrated firmware has been flashed and verified on the ESP32-C3-DevKitM-1
-with Rust 1.99.1 and espflash 4.6.0. Startup checks confirmed Wi-Fi connection,
-DHCP, Sonos discovery, and speaker identity verification; operation was then
-confirmed on hardware. After the DHCP fixes, three consecutive starts in
-802.11b/g mode obtained an address and reached `Ready`. Some Sonos requests
-still timed out during testing; signal strength was about -73 to -74 dBm.
-The earlier firmware was also tested with all three
-station buttons and example streams. Reconnection after restarting the access
-point has not been rechecked after migration.
+with Rust 1.99.1 and espflash 4.6.0. Early startup tests passed, but subsequent
+use exposed intermittent Wi-Fi and Sonos-discovery failures. The explicit
+15 dBm transmit-power setting addresses a concrete difference from the old
+stack. With this setting, three starts obtained an address and reached `Ready`,
+and all three station selections reached `Playing radio`. One selection
+needed a playback retry. These checks do not establish long-term reliability;
+reconnection after restarting the access point has not been rechecked.
+
+The last pre-migration revision is `b3c9597`, using the legacy `esp` toolchain
+and pinned dependencies. It remains the rollback point if the current stack
+continues to be unreliable in everyday use.
 
 All 16 host tests pass, covering DHCP, Sonos parsing, button logic, and LED
 frame generation. Both examples and the remote build in debug and release profiles;
